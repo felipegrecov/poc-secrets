@@ -1,0 +1,84 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-user-operation
+  namespace: datenna-demo
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-user-operation
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operation
+          image: datenna-minio:2025-10-15
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 2; done
+              case "$MINIO_ACTION" in
+                create)
+                  mc admin user add local "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                  mc admin policy attach local datenna-app --user "$MINIO_ACCESS_KEY"
+                  ;;
+                disable)
+                  mc admin user disable local "$MINIO_ACCESS_KEY" || true
+                  ;;
+                remove)
+                  mc admin user remove local "$MINIO_ACCESS_KEY" || true
+                  ;;
+                *)
+                  echo "Unsupported MINIO_ACTION" >&2
+                  exit 2
+                  ;;
+              esac
+          env:
+            - name: MC_CONFIG_DIR
+              value: /tmp/.mc
+            - name: MINIO_ACTION
+              valueFrom:
+                secretKeyRef:
+                  name: minio-user-operation
+                  key: action
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-user-operation
+                  key: access-key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-user-operation
+                  key: secret-key
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-root
+                  key: username
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-root
+                  key: password
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]

@@ -1,0 +1,101 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+  namespace: datenna-demo
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: datenna-minio:2025-10-15
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 2; done
+              mc mb --ignore-existing local/datenna-objects
+              cat > /tmp/app-policy.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Action": ["s3:GetBucketLocation", "s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::datenna-objects"]
+                  },
+                  {
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": ["arn:aws:s3:::datenna-objects/*"]
+                  }
+                ]
+              }
+              POLICY
+              mc admin policy create local datenna-app /tmp/app-policy.json || true
+              mc admin user add local "$MINIO_BLUE_ACCESS_KEY" "$MINIO_BLUE_SECRET_KEY" || true
+              mc admin user enable local "$MINIO_BLUE_ACCESS_KEY"
+              mc admin policy attach local datenna-app --user "$MINIO_BLUE_ACCESS_KEY"
+              mc admin user add local "$MINIO_GREEN_ACCESS_KEY" "$MINIO_GREEN_SECRET_KEY" || true
+              mc admin user enable local "$MINIO_GREEN_ACCESS_KEY"
+              mc admin policy attach local datenna-app --user "$MINIO_GREEN_ACCESS_KEY"
+          env:
+            - name: MC_CONFIG_DIR
+              value: /tmp/.mc
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-root
+                  key: username
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-root
+                  key: password
+            - name: MINIO_BLUE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-app-bootstrap
+                  key: blue-access-key
+            - name: MINIO_BLUE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-app-bootstrap
+                  key: blue-secret-key
+            - name: MINIO_GREEN_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-app-bootstrap
+                  key: green-access-key
+            - name: MINIO_GREEN_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-app-bootstrap
+                  key: green-secret-key
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

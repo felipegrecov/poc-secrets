@@ -1,0 +1,8 @@
+.secrets.env
+.openbao-bootstrap.json
+.tools/
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+tmp/
